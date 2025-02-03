@@ -8,34 +8,66 @@ print ('Measurement-name: '+measurement_name)
 
 # argv1 = outsideip, agrv2 = Domain, argv3 length, argv4 tragetip, sys.argv[5] bucketname, sys.argv[6] date, sys.argv[7] asn, sys.argv[8] abuse
 
-
-
-
 abuseip_key = os.getenv('ABUSEIP_KEY')
+abuseip_response = ''
 if abuseip_key is not None:
     import requests
     import json
-    url = 'https://api.abuseipdb.com/api/v2/check'
-    querystring = {
-        'ipAddress': str(sys.argv[1]),
-        'maxAgeInDays': '90'
-    }
-    headers = {
-        'Accept': 'application/json',
-        'Key': abuseip_key
-    }
+    import math
+    import pickle
+    from datetime import datetime
 
-    response = requests.request(method='GET', url=url, headers=headers, params=querystring)
-    abuseip_response = json.loads(response.text)
-    abuseConfidenceScore = str(abuseip_response["data"]["abuseConfidenceScore"])
-    totalReports = str(abuseip_response["data"]["totalReports"])
+    url = 'https://api.abuseipdb.com/api/v2/check'
+
+    new_ip = str(sys.argv[1])
+    now = math.trunc(datetime.timestamp(datetime.now()))
+
+    try:
+        with open("ip_db", "rb") as fp:
+            ip_db = pickle.load(fp)
+    except IOError:
+        ip_db = []
+
+    for elem in ip_db[:]:
+        if now - elem[1] > 3600:
+            print(f'removing from db {elem}')
+            ip_db.remove(elem)
+
+    found = False
+    for elem in ip_db:
+        if elem[0] == new_ip:
+            found = True
+            break
+
+    if not found:
+        ip_db.append([new_ip, now])
+
+        querystring = {
+            'ipAddress': str(sys.argv[1]),
+            'maxAgeInDays': '90'
+        }
+        headers = {
+            'Accept': 'application/json',
+            'Key': abuseip_key
+        }
+
+        response = requests.request(method='GET', url=url, headers=headers, params=querystring)
+        if response.status_code == 200:
+            abuseip_response = json.loads(response.text)
+            abuseConfidenceScore = str(abuseip_response["data"]["abuseConfidenceScore"])
+            totalReports = str(abuseip_response["data"]["totalReports"])
+        else:
+            print(f'response is: {response.status_code}')
+
+    with open("ip_db", "wb") as fp:
+        pickle.dump(ip_db, fp)
+
     #print(json.dumps(abuseip_response, sort_keys=True, indent=4))
 
 
 asn = str(sys.argv[7])
 
 import geoip2.database
-import socket 
  
 # IP gets infos from the DB
 reader = geoip2.database.Reader('/geolite/GeoLite2-City.mmdb')
@@ -73,13 +105,12 @@ if asn =='true':
 print ('Outside IP: ', IP)
 print ('Target IP: ', Target)
 print ('Domain: ', Domain)
-if abuseip_key is not None:
+if abuseip_key is not None and abuseip_response != '':
     print("abuseConfidenceScore: " + abuseConfidenceScore)
     print("totalReports: " + totalReports)
 
 import influxdb_client
 from influxdb_client.client.write_api import SYNCHRONOUS
-
 
 # influx configuration - edit these
 npmhome = "/root/.config/NPMGRAF"
@@ -142,7 +173,7 @@ point.tag("IP", IP),
 point.tag("Target", Target)
 if asn =='true':
     point.tag("Asn", Asn)
-if abuseip_key is not None:
+if abuseip_key is not None and abuseip_response != '':
     point.tag("abuseConfidenceScore", abuseConfidenceScore)
     point.tag("totalReports", totalReports)
 
@@ -159,7 +190,7 @@ if asn =='true':
 point.field("Name", Country)
 point.field("duration", duration)
 point.field("metric", 1)
-if abuseip_key is not None:
+if abuseip_key is not None and abuseip_response != '':
     point.field("abuseConfidenceScore", abuseConfidenceScore)
     point.field("totalReports", totalReports)
 
